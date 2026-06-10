@@ -14,6 +14,10 @@
     {
       "path": "/api/feedback/run",
       "schedule": "0 9 * * 1"
+    },
+    {
+      "path": "/api/assets/generate",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

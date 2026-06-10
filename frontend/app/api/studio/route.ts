@@ -7,7 +7,7 @@ import { checkStudioRateLimit } from "@backend/auth/ratelimit"
 
 export const maxDuration = 60
 
-const DEFAULT_STUDIO_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
+const DEFAULT_STUDIO_MODELS = ["gemini-1.5-flash", "gemini-1.5-flash-8b"]
 
 export async function POST(req: Request) {
   console.log("POST /api/studio hit")

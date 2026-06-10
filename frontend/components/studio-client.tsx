@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useCallback } from "react"
 import { experimental_useObject as useObject } from "@ai-sdk/react"
 import type { DeepPartial } from "ai"
 import { reelBriefSchema, type ReelBrief } from "@backend/schemas/reel-brief"
@@ -8,7 +8,19 @@ import { CHANNELS, NICHES, FORMATS } from "@backend/data"
 import { OutputExamples } from "@/components/output-examples"
 import { Button } from "@/components/ui/button"
 import { createReelBriefPdfFilename } from "@/components/pdf/pdf-utils"
-import { Loader2, Wand2, Copy, Check, AlertTriangle, ChevronRight, Download } from "lucide-react"
+import { Loader2, Wand2, Copy, Check, AlertTriangle, ChevronRight, Download, Film, Play } from "lucide-react"
+
+type VideoGenState = "idle" | "generating" | "done" | "error"
+
+type StudioVideoResult = {
+  runId: string
+  title: string
+  topic: string
+  totalDurationSeconds: number
+  videoUrl: string
+  downloadUrl: string
+  pageUrl: string
+}
 
 type Channel = (typeof CHANNELS)[number]
 type StreamedReelBrief = DeepPartial<ReelBrief>
@@ -29,12 +41,22 @@ export function StudioClient() {
   const [trend, setTrend] = useState<string>(TREND_PRESETS[0])
   const [language, setLanguage] = useState<"EN" | "HI">("EN")
 
+  // Video generation state
+  const [videoGenState, setVideoGenState] = useState<VideoGenState>("idle")
+  const [generatedVideo, setGeneratedVideo] = useState<StudioVideoResult | null>(null)
+  const [videoGenError, setVideoGenError] = useState<string | null>(null)
+
   const { object, submit, isLoading, error, stop } = useObject({
     api: "/api/studio",
     schema: reelBriefSchema,
   })
 
   const onGenerate = () => {
+    // Reset video state when generating a new brief
+    setVideoGenState("idle")
+    setGeneratedVideo(null)
+    setVideoGenError(null)
+
     const payload = {
       channelHandle: channel.handle,
       niche,
@@ -46,6 +68,39 @@ export function StudioClient() {
     console.log("submitting", payload)
     submit(payload)
   }
+
+  const onGenerateVideo = useCallback(async () => {
+    setVideoGenState("generating")
+    setGeneratedVideo(null)
+    setVideoGenError(null)
+
+    try {
+      const response = await fetch("/api/video/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channelHandle: channel.handle,
+          niche,
+          format,
+          trend,
+          language,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error ?? `Request failed with status ${response.status}`)
+      }
+
+      const data = (await response.json()) as StudioVideoResult
+      setGeneratedVideo(data)
+      setVideoGenState("done")
+    } catch (err) {
+      console.error("Video generation failed:", err)
+      setVideoGenState("error")
+      setVideoGenError(err instanceof Error ? err.message : "Unknown error during video generation")
+    }
+  }, [channel.handle, format, language, niche, trend])
 
   return (
     <section className="grid grid-cols-1 lg:grid-cols-[400px_1fr]">
@@ -177,6 +232,33 @@ export function StudioClient() {
             )}
           </div>
 
+          <button
+            type="button"
+            onClick={onGenerateVideo}
+            disabled={videoGenState === "generating" || isLoading}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-md border border-foreground bg-background px-4 py-2.5 text-sm font-medium text-foreground hover:bg-card disabled:opacity-50"
+          >
+            {videoGenState === "generating" ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Rendering final video…
+              </>
+            ) : (
+              <>
+                <Film className="size-4" />
+                Generate final video
+              </>
+            )}
+          </button>
+
+          {(videoGenState === "generating" || generatedVideo || videoGenError) && (
+            <StudioVideoCard
+              state={videoGenState}
+              video={generatedVideo}
+              error={videoGenError}
+            />
+          )}
+
           {error && (
             <div className="mt-2 rounded border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
               {formatStudioError(error.message)}
@@ -205,6 +287,10 @@ export function StudioClient() {
             brief={object}
             isStreaming={isLoading}
             channelHandle={channel.handle}
+            videoGenState={videoGenState}
+            generatedVideo={generatedVideo}
+            videoGenError={videoGenError}
+            onGenerateVideo={onGenerateVideo}
           />
         )}
       </div>
@@ -261,10 +347,18 @@ function BriefOutput({
   brief,
   isStreaming,
   channelHandle,
+  videoGenState,
+  generatedVideo,
+  videoGenError,
+  onGenerateVideo,
 }: {
   brief: StreamedReelBrief | undefined
   isStreaming: boolean
   channelHandle: string
+  videoGenState: VideoGenState
+  generatedVideo: StudioVideoResult | null
+  videoGenError: string | null
+  onGenerateVideo: () => void
 }) {
   const completedBrief = !isStreaming && brief ? reelBriefSchema.safeParse(brief) : null
 
@@ -334,18 +428,21 @@ function BriefOutput({
         <div className="rounded-md border border-border bg-card divide-y divide-border">
           <ScriptRow label="HOOK" line={brief?.script?.hook} time="0:00 – 0:07" />
           <ScriptRow label="CONTEXT" line={brief?.script?.context} time="0:07 – 0:15" />
-          {(brief?.script?.beats ?? []).map((b, i) => (
-            <ScriptRow
-              key={i}
-              label={`BEAT ${i + 1}`}
-              line={b?.line}
-              broll={b?.broll}
-              time={`0:${(15 + i * 8).toString().padStart(2, "0")} – 0:${(
-                23 +
-                i * 8
-              ).toString().padStart(2, "0")}`}
-            />
-          ))}
+          {(brief?.script?.beats ?? []).map((b, i) => {
+            return (
+              <div key={i}>
+                <ScriptRow
+                  label={`BEAT ${i + 1}`}
+                  line={b?.line}
+                  broll={b?.broll}
+                  time={`0:${(15 + i * 8).toString().padStart(2, "0")} – 0:${(
+                    23 +
+                    i * 8
+                  ).toString().padStart(2, "0")}`}
+                />
+              </div>
+            )
+          })}
           {brief?.script?.beats && brief.script.beats.length === 0 && (
             <ScriptRow label="BEAT 1" line={undefined} time="…" />
           )}
@@ -417,6 +514,76 @@ function BriefOutput({
         </div>
       </Section>
 
+      {/* Video Generation Panel */}
+      {!isStreaming && brief?.script && (
+        <Section
+          n="08"
+          title="Generated video"
+          sub="Uses the selected Studio brief inputs to render and stitch a final Veo MP4."
+        >
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onGenerateVideo}
+                disabled={videoGenState === "generating"}
+                className="inline-flex items-center gap-2 rounded-md bg-foreground px-5 py-2.5 text-sm font-medium text-background hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {videoGenState === "generating" ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Rendering final video…
+                  </>
+                ) : videoGenState === "done" ? (
+                  <>
+                    <Play className="size-4" />
+                    Re-generate final video
+                  </>
+                ) : (
+                  <>
+                    <Film className="size-4" />
+                    Generate final video
+                  </>
+                )}
+              </button>
+
+              {videoGenState === "done" && (
+                <span className="font-mono text-[10px] uppercase tracking-widest text-accent">
+                  final MP4 ready
+                </span>
+              )}
+            </div>
+
+            {videoGenState === "generating" && (
+              <div className="rounded-md border border-border bg-card/50 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="relative size-8">
+                    <div className="absolute inset-0 rounded-full border-2 border-violet-500/30" />
+                    <div className="absolute inset-0 rounded-full border-2 border-violet-500 border-t-transparent animate-spin" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">
+                      Rendering and stitching a Veo video from this Studio input…
+                    </p>
+                    <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                      This can take several minutes. The final video appears here when assembly finishes.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {videoGenError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                {videoGenError}
+              </div>
+            )}
+
+            {generatedVideo && <StudioVideoCard state={videoGenState} video={generatedVideo} error={null} />}
+          </div>
+        </Section>
+      )}
+
       {/* Next-stage handoff */}
       {!isStreaming && brief?.script && (
         <>
@@ -447,7 +614,7 @@ function BriefOutput({
           </div>
 
           <Section
-            n="08"
+            n="09"
             title="Output examples"
             sub="Playable sample render assets for the next pipeline stage."
           >
@@ -455,6 +622,77 @@ function BriefOutput({
           </Section>
         </>
       )}
+    </div>
+  )
+}
+
+function StudioVideoCard({
+  state,
+  video,
+  error,
+}: {
+  state: VideoGenState
+  video: StudioVideoResult | null
+  error: string | null
+}) {
+  if (state === "generating") {
+    return (
+      <div className="rounded-md border border-border bg-background p-3">
+        <div className="flex items-center gap-2 text-sm">
+          <Loader2 className="size-4 animate-spin" />
+          <span>Rendering final Veo video from these fields.</span>
+        </div>
+        <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+          Concurrency is capped at 2 scenes. Leave this tab open.
+        </p>
+      </div>
+    )
+  }
+
+  if (state === "error" && error) {
+    return (
+      <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+        {error}
+      </div>
+    )
+  }
+
+  if (!video) {
+    return null
+  }
+
+  return (
+    <div className="rounded-md border border-border bg-background p-3">
+      <video
+        className="aspect-video w-full rounded border border-border bg-black object-cover"
+        controls
+        playsInline
+        preload="metadata"
+        src={video.videoUrl}
+      />
+      <p className="mt-3 font-serif text-lg leading-tight">{video.title}</p>
+      <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+        {video.totalDurationSeconds}s · run {video.runId.slice(0, 8)}
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <a
+          href={video.downloadUrl}
+          download
+          className="inline-flex items-center justify-center gap-1.5 rounded-sm bg-foreground px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-background hover:bg-foreground/90"
+        >
+          <Download className="size-3" />
+          Download MP4
+        </a>
+        <a
+          href={video.videoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center justify-center gap-1.5 rounded-sm border border-border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-foreground hover:text-accent"
+        >
+          <Play className="size-3" />
+          Open
+        </a>
+      </div>
     </div>
   )
 }

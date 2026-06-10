@@ -1,4 +1,4 @@
-import { ExternalLink, Film, Timer } from "lucide-react"
+import { Download, ExternalLink, Film, Timer } from "lucide-react"
 import { getChannel, OUTPUT_EXAMPLES, type OutputExample } from "@backend/data"
 
 type OutputExamplesProps = {
@@ -108,13 +108,23 @@ function OutputExampleCard({
           <p>{example.cost}</p>
         </div>
 
-        <a
-          href={example.videoUrl}
-          className="mt-3 inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-foreground hover:text-accent"
-        >
-          Open render asset
-          <ExternalLink className="size-3" />
-        </a>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <a
+            href={example.videoUrl}
+            download
+            className="inline-flex items-center justify-center gap-1.5 rounded-sm bg-foreground px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-background hover:bg-foreground/90"
+          >
+            Download video
+            <Download className="size-3" />
+          </a>
+          <a
+            href={example.videoUrl}
+            className="inline-flex items-center justify-center gap-1.5 rounded-sm border border-border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-foreground hover:text-accent"
+          >
+            Open
+            <ExternalLink className="size-3" />
+          </a>
+        </div>
       </div>
     </article>
   )
